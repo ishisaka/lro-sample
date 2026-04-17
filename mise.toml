@@ -1,0 +1,23 @@
+#:schema https://mise.jdx.dev/schema/mise.json
+
+[tools]
+go = "1.26"
+jq = "latest"
+
+[tasks.server]
+description = "Start the AIP-151 LRO sample server on :8080"
+alias = "s"
+run = "go run ."
+
+[tasks."reindex:run"]
+description = "Register a reindex task and wait for completion"
+alias = "run"
+run = "./run-reindex.sh"
+run_windows = "pwsh -File ./run-reindex.ps1"
+
+
+[tasks."reindex:cancel"]
+description = "Register a reindex task and cancel it mid-way"
+alias = "cancel"
+run = "./cancel-reindex.sh"
+run_windows = "pwsh -File ./cancel-reindex.ps1"
