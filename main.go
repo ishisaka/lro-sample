@@ -26,6 +26,7 @@ import (
 // Operation リソース (google.longrunning.Operation 相当)
 // -----------------------------------------------------------------------------
 
+// Operation は非同期操作を表現する構造体です。
 type Operation struct {
 	Name     string          `json:"name"`               // "operations/{id}"
 	Metadata json.RawMessage `json:"metadata,omitempty"` // metadata_type
@@ -34,7 +35,9 @@ type Operation struct {
 	Response json.RawMessage `json:"response,omitempty"` // 成功時のみ (response_type)
 }
 
-// google.rpc.Status の簡易版
+// OperationError は操作失敗時のエラー情報を表す構造体です。
+// Code フィールドはエラーコードを表します。
+// Message フィールドはエラーに関する詳細なメッセージを表します。
 type OperationError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -46,12 +49,16 @@ type OperationError struct {
 //   - ReindexResponse: 最終結果 (response_type)
 // -----------------------------------------------------------------------------
 
+// ReindexMetadata は再インデックス操作の進捗とタイムスタンプを保持する構造体です。
 type ReindexMetadata struct {
 	Progress   int       `json:"progress"` // 0-100
 	StartTime  time.Time `json:"startTime"`
 	UpdateTime time.Time `json:"updateTime"`
 }
 
+// ReindexResponse は再インデックス操作の結果を格納する構造体です。
+// Publisher フィールドは対象の出版社名を表します。
+// BooksIndexed フィールドはインデックスされた書籍の総数を表します。
 type ReindexResponse struct {
 	Publisher    string `json:"publisher"`
 	BooksIndexed int    `json:"booksIndexed"`
@@ -62,12 +69,17 @@ type ReindexResponse struct {
 // 本番では Redis や RDB など永続層に格納します
 // -----------------------------------------------------------------------------
 
+// OperationStore は非同期操作の管理を行うためのデータ構造体です。
+// 操作の保存、取得、更新、完了、失敗時の処理をサポートします。
+// 現在の操作状態やキャンセル関数を保持します。
 type OperationStore struct {
 	mu      sync.RWMutex
 	ops     map[string]*Operation
 	cancels map[string]context.CancelFunc
 }
 
+// NewOperationStore は新しい OperationStore インスタンスを作成して返します。
+// 操作とそのキャンセル関数の管理を行います。
 func NewOperationStore() *OperationStore {
 	return &OperationStore{
 		ops:     make(map[string]*Operation),
@@ -75,12 +87,16 @@ func NewOperationStore() *OperationStore {
 	}
 }
 
+// Put は指定された Operation をストアに保存します。
+// 内部でロックを取得して操作をスレッドセーフに実行します。
 func (s *OperationStore) Put(op *Operation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ops[op.Name] = op
 }
 
+// Get は名前に関連付けられた Operation を取得します。
+// 該当する Operation が存在する場合は true を返し、存在しない場合は false を返します。
 func (s *OperationStore) Get(name string) (*Operation, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -88,6 +104,7 @@ func (s *OperationStore) Get(name string) (*Operation, bool) {
 	return op, ok
 }
 
+// UpdateMetadata は指定された操作のメタデータを更新します。メタデータは指定された値を JSON にシリアライズして格納します。
 func (s *OperationStore) UpdateMetadata(name string, meta any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,6 +116,7 @@ func (s *OperationStore) UpdateMetadata(name string, meta any) {
 	op.Metadata = b
 }
 
+// Complete は指定された名前の操作を完了状態に設定します。操作のレスポンスデータを格納し、キャンセル関数を削除します。
 func (s *OperationStore) Complete(name string, response any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -112,6 +130,7 @@ func (s *OperationStore) Complete(name string, response any) {
 	delete(s.cancels, name) // 完了済みはキャンセル不要
 }
 
+// Fail は指定された名前の操作を失敗状態に設定します。エラーコードとメッセージを格納し、キャンセル関数を削除します。
 func (s *OperationStore) Fail(name string, code int, message string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,12 +143,14 @@ func (s *OperationStore) Fail(name string, code int, message string) {
 	delete(s.cancels, name)
 }
 
+// RegisterCancel は指定された名前に関連付けてキャンセル関数を登録します。スレッドセーフに操作を実行します。
 func (s *OperationStore) RegisterCancel(name string, cancel context.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.cancels[name] = cancel
 }
 
+// Cancel は指定された名前に関連付けられた操作をキャンセルします。スレッドセーフに操作を実行します。 Cancel は指定された名前の非同期操作をキャンセルします。キャンセルに成功した場合は true を返し、失敗した場合は false を返します。
 func (s *OperationStore) Cancel(name string) bool {
 	s.mu.Lock()
 	cancel, ok := s.cancels[name]
@@ -145,6 +166,8 @@ func (s *OperationStore) Cancel(name string) bool {
 // HTTP ハンドラ
 // -----------------------------------------------------------------------------
 
+// Server は非同期操作を管理するための HTTP サーバーを表す構造体です。
+// OperationStore を使用して操作の保存や状態管理を行います。
 type Server struct {
 	store *OperationStore
 }
@@ -174,7 +197,7 @@ func (s *Server) ReindexBooks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, op)
 }
 
-// 実際の長時間処理。デモ用に 1 秒 x 5 ステップで進捗更新します
+// runReindex は再インデックス操作を非同期に実行します。進行状況を更新し、完了またはキャンセル状態を設定します。
 func (s *Server) runReindex(ctx context.Context, opName, publisher string, start time.Time) {
 	const steps = 5
 
@@ -200,8 +223,7 @@ func (s *Server) runReindex(ctx context.Context, opName, publisher string, start
 	})
 }
 
-// GET /v1/operations/{id}
-// クライアントはこれをポーリングして done=true になるのを待ちます
+// GetOperation は指定された ID に基づいて操作を取得し、操作が見つからない場合は 404 エラーを返します。
 func (s *Server) GetOperation(w http.ResponseWriter, r *http.Request) {
 	name := "operations/" + chi.URLParam(r, "id")
 	op, ok := s.store.Get(name)
@@ -213,6 +235,9 @@ func (s *Server) GetOperation(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /v1/operations/{id}:cancel
+
+// CancelOperation は指定された操作 ID に基づいて非同期操作をキャンセルします。
+// 操作が見つからない場合、またはすでに完了している場合は 404 エラーを返します。
 func (s *Server) CancelOperation(w http.ResponseWriter, r *http.Request) {
 	name := "operations/" + chi.URLParam(r, "id")
 	if !s.store.Cancel(name) {
@@ -226,12 +251,14 @@ func (s *Server) CancelOperation(w http.ResponseWriter, r *http.Request) {
 // utility
 // -----------------------------------------------------------------------------
 
+// writeJSON はステータスコードと JSON 応答を HTTP レスポンスライターに送信するユーティリティ関数です。
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError は指定されたステータスコードとエラーメッセージを JSON 形式で HTTP レスポンスとして送信します。
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
@@ -241,6 +268,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	})
 }
 
+// newID は 8 バイトのランダムなバイト列を生成し、16 進数文字列にエンコードして返します。
 func newID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
