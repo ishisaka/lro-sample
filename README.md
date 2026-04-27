@@ -41,3 +41,11 @@ mise run reindex:run
 mise run reindex:cancel
 # => {"name":"operations/reindex-1234567890","metadata":{"progress":10,"startTime":"2024-06-30T12:34:56Z"},"done":true,"error":{"code":1,"message":"operation cancelled by user"}}
 ```
+
+## 参考
+
+[longrunning proto](https://github.com/googleapis/googleapis/tree/master/google/longrunning)
+
+[Long Running Operations API](https://github.com/googleapis/google-cloud-go/tree/main/longrunning)
+
+[longrunning package \- cloud\.google\.com/go/longrunning \- Go Packages](https://pkg.go.dev/cloud.google.com/go/longrunning)
